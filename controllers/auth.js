@@ -1,5 +1,6 @@
 const User = require("../models/user");
 const jwt = require("jsonwebtoken");
+const { expressjwt } = require("express-jwt");
 const { OAuth2Client } = require("google-auth-library");
 const nodemailer = require("nodemailer");
 
@@ -67,7 +68,7 @@ exports.signup = async (req, res) => {
     await sendEmail(emailData);
 
     return res.status(200).json({
-      message: "Signup success! Please sign in",
+      message: `Email has been sent to ${email}. Follow the instruction to active your acccount`,
     });
   } catch (error) {
     console.error("Signup error:", error);
@@ -148,4 +149,29 @@ exports.signin = (req, res) => {
         error: err,
       });
     });
+};
+
+exports.requireSignin = expressjwt({
+  secret: process.env.JWT_SECRET,
+  algorithms: ["HS256"],
+});
+
+exports.adminMiddleware = (req, res, next) => {
+  User.findById({ _id: req.auth._id })
+    .exec()
+    .then((user) => {
+      if (!user) {
+        return res.status(400).json({
+          error: "User not found",
+        });
+      }
+      if (user.role !== "admin") {
+        return res.status(400).json({
+          error: "Admin resource. Access denied",
+        });
+      }
+      req.profile = user;
+      next();
+    })
+    .catch((err) => console.log(err));
 };
