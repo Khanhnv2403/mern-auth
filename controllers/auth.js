@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { expressjwt } = require("express-jwt");
 const { OAuth2Client } = require("google-auth-library");
 const nodemailer = require("nodemailer");
+const _ = require("lodash");
 
 const myOAuth2Client = new OAuth2Client(
   process.env.CLIENT_ID,
@@ -134,7 +135,7 @@ exports.signin = (req, res) => {
         });
       }
       const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET, {
-        expiresIn: "5m",
+        expiresIn: "1m",
       });
       const { _id, name, email, role } = user;
 
@@ -174,4 +175,101 @@ exports.adminMiddleware = (req, res, next) => {
       next();
     })
     .catch((err) => console.log(err));
+};
+
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Kiểm tra người dùng tồn tại
+    const user = await User.findOne({ email }).exec();
+    if (!user) {
+      return res.status(400).json({
+        error: "User with that email does not exist. Please sign up",
+      });
+    }
+
+    // Tạo và lưu token vào db
+    const token = jwt.sign({ _id: user._id }, process.env.JWT_RESET_PASSWORD, {
+      expiresIn: "3m",
+    });
+
+    const resetPasswordLink = await User.updateOne({
+      resetPasswordLink: token,
+    }).exec();
+    if (!resetPasswordLink) {
+      console.log("resetPasswordLink: ", resetPasswordLink);
+      return res.status(400).json({
+        error: "Database connection error on user password forgot request",
+      });
+    }
+
+    // Gửi email
+    const { name, email: userEmail } = user;
+    const emailData = {
+      to: userEmail,
+      subject: "Notification! Reset your password.",
+      content: `<h3>Hello ${name}, please follow the link...</h3>
+        <p>${process.env.CLIENT_URL}/auth/password/reset/${token}</p>`,
+    };
+
+    // Gửi email và trả về thông báo
+    sendEmail(emailData);
+    return res.status(200).json({
+      message: `Email has been sent to ${userEmail}. Follow the instruction to active your account`,
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    return res.status(400).json({
+      error: error.message || "Something went wrong",
+    });
+  }
+};
+
+exports.resetPassword = (req, res) => {
+  const { resetPasswordLink, newPassword } = req.body;
+
+  if (resetPasswordLink) {
+    jwt.verify(
+      resetPasswordLink,
+      process.env.JWT_RESET_PASSWORD,
+      function (err, decoded) {
+        if (err) {
+          return res.status(400).json({
+            error: "Expired link. Try again",
+          });
+        }
+        User.findOne({ resetPasswordLink })
+          .exec()
+          .then((user) => {
+            console.log("user: ", user);
+
+            if (!user) {
+              return res.status(400).json({
+                error: "Something went wrong. Try later",
+              });
+            }
+            const updatedFields = {
+              password: newPassword,
+              resetPasswordLink: "",
+            };
+            user = _.extend(user, updatedFields);
+            user
+              .save()
+              .then((response) => {
+                console.log("response: ", response);
+                return res.status(200).json({
+                  error: "Awesome ! Now you can login with your new password",
+                });
+              })
+              .catch((err) => {
+                console.log("err save: ", err);
+              });
+          })
+          .catch((err) => {
+            console.log("err: ", err);
+          });
+      }
+    );
+  }
 };
